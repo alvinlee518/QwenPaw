@@ -225,6 +225,7 @@ class DiscordConfig(BaseChannelConfig):
     http_proxy_auth: str = ""
     accept_bot_messages: bool = False
     streaming_enabled: bool = False
+    media_dir: Optional[str] = None
 
 
 class DingTalkConfig(BaseChannelConfig):
