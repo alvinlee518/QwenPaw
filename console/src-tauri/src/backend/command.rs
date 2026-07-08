@@ -1,7 +1,9 @@
 //! Backend command construction for development and packaged builds.
 
 use std::path::{Path, PathBuf};
-#[cfg(debug_assertions)]
+// StdCommand/Stdio are used by `command_exists` (dev) and
+// `resolve_login_shell_path` (packaged macOS).
+#[cfg(any(debug_assertions, target_os = "macos"))]
 use std::process::{Command as StdCommand, Stdio};
 
 #[cfg(not(debug_assertions))]
@@ -146,7 +148,15 @@ fn packaged_backend_executable(app: &tauri::AppHandle) -> Result<PathBuf, String
 
 #[cfg(not(debug_assertions))]
 fn path_with_backend_dir(backend_dir: &Path) -> Result<String, String> {
-    let mut paths = vec![backend_dir.to_path_buf()];
+    let mut paths: Vec<PathBuf> = vec![backend_dir.to_path_buf()];
+    // GUI apps on macOS inherit launchd's minimal PATH and skip the login
+    // shell, so user-installed version managers (Homebrew, nvm, mise, pyenv,
+    // asdf — usually exported in ~/.zshrc) are missing. Resolve the PATH a
+    // login+interactive shell would produce and prefer it over our own env.
+    #[cfg(target_os = "macos")]
+    if let Some(login) = resolve_login_shell_path() {
+        paths.extend(std::env::split_paths(&login));
+    }
     if let Some(existing) = std::env::var_os(path_env_key()) {
         paths.extend(std::env::split_paths(&existing));
     }
@@ -155,6 +165,38 @@ fn path_with_backend_dir(backend_dir: &Path) -> Result<String, String> {
         .map_err(|err| format!("failed to join backend PATH entries: {err}"))?
         .into_string()
         .map_err(|_| "backend PATH contains non-Unicode data".to_string())
+}
+
+/// Spawns a login+interactive shell and captures its `PATH`.
+///
+/// Runs `$SHELL -l -i -c 'printf %s "$PATH"'`. `-l` sources login init
+/// files (~/.zprofile, ~/.bash_profile); `-i` sources the interactive rc
+/// files (~/.zshrc, ~/.bashrc) — where nvm/mise/asdf/pyenv typically hook
+/// their shim directories. `-l -c` alone is NOT enough: a login
+/// non-interactive shell skips the rc files, so version-manager PATH
+/// entries would be lost. Returns None on any failure so the caller
+/// falls back to the inherited env PATH.
+#[cfg(all(not(debug_assertions), target_os = "macos"))]
+fn resolve_login_shell_path() -> Option<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+
+    let output = StdCommand::new(&shell)
+        .args(["-l", "-i", "-c", "printf '%s' \"$PATH\""])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let path = String::from_utf8(output.stdout).ok()?;
+    if path.trim().is_empty() {
+        return None;
+    }
+    Some(path)
 }
 
 #[cfg(all(not(debug_assertions), windows))]
