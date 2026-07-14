@@ -71,6 +71,7 @@ interface ApprovalMessageData {
   rootSessionId?: string;
   agentId: string;
   toolName: string;
+  toolSource?: string;
   severity: string;
   findingsCount: number;
   findingsSummary: string;
@@ -1490,6 +1491,7 @@ export default function ChatPage() {
         rootSessionId: approval.root_session_id,
         agentId: approval.agent_id,
         toolName: approval.tool_name,
+        toolSource: approval.tool_source,
         severity: approval.severity,
         findingsCount: approval.findings_count,
         findingsSummary: approval.findings_summary,
@@ -3145,6 +3147,7 @@ export default function ChatPage() {
               requestId={request.requestId}
               agentId={request.agentId}
               toolName={request.toolName}
+              toolSource={request.toolSource}
               severity={request.severity}
               findingsCount={request.findingsCount}
               findingsSummary={request.findingsSummary}
@@ -3156,9 +3159,6 @@ export default function ChatPage() {
               isGeneralized={request.isGeneralized}
               exactTarget={request.exactTarget}
               similarTarget={request.similarTarget}
-              executionLevel={
-                sessionApprovalLevelRef.current ?? runningConfigApprovalLevel
-              }
               onApprove={(reqId, scope) => handleApprove(reqId, scope)}
               onDeny={handleDeny}
               onCancel={() => {
