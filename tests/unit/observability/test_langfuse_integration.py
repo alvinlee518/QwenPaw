@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=wrong-import-position
 """Tests for Langfuse observability integration components.
 
 Covers:
@@ -7,6 +8,7 @@ Covers:
 - LangfuseToolSpanMiddleware: tool observations created/skipped correctly
 - OpenAIChatModelCompat.__call__: Langfuse kwargs injection
 """
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -16,8 +18,13 @@ from unittest.mock import patch
 
 import pytest
 
-from qwenpaw.observability import langfuse as lf
+# flake8: noqa: E402,E501
+pytest.importorskip(
+    "langfuse",
+    reason="langfuse SDK required for observability tests",
+)
 
+from qwenpaw.observability import langfuse as lf
 
 # ---------------------------------------------------------------------------
 # Shared fakes

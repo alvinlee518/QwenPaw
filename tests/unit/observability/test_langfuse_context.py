@@ -1,7 +1,14 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=wrong-import-position
 from contextlib import contextmanager
 
 import pytest
+
+# flake8: noqa: E402,E501
+pytest.importorskip(
+    "langfuse",
+    reason="langfuse SDK required for observability tests",
+)
 
 from qwenpaw.__version__ import __version__
 from qwenpaw.observability import langfuse as lf
