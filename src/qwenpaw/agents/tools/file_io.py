@@ -10,15 +10,17 @@ from agentscope.message import TextBlock, ToolResultState
 from agentscope.tool import ToolChunk
 
 from .utils import (
+    build_truncation_metadata,
     truncate_text_output,
     read_file_safe,
     DEFAULT_MAX_BYTES,
+    TRUNCATION_METADATA_KEY,
 )
 from ...config.context import (
     get_current_workspace_dir,
     get_current_recent_max_bytes,
 )
-from ...constant import WORKING_DIR, TRUNCATION_NOTICE_MARKER
+from ...constant import WORKING_DIR
 from ...runtime.tool_registry import tool_descriptor
 
 
@@ -84,7 +86,17 @@ def _get_encoding_for_file(file_path: str) -> str:
     return "utf-8"
 
 
-@tool_descriptor(requires_sandbox=("file_read",), async_execution=True)
+@tool_descriptor(
+    requires_sandbox=("file_read",),
+    async_execution=True,
+    tool_type="file",
+    target_param="file_path",
+    policy_name="Read",
+    default_policy="allow",
+    policy_reason="Read-only file access (global)",
+    ui_description="Read file contents",
+    ui_icon="📄",
+)
 async def read_file(  # pylint: disable=too-many-return-statements
     file_path: str,
     start_line: Optional[int] = None,
@@ -199,35 +211,36 @@ async def read_file(  # pylint: disable=too-many-return-statements
 
         # Apply smart truncation (consistent with shell output format)
         max_bytes = get_current_recent_max_bytes() or DEFAULT_MAX_BYTES
-        text = truncate_text_output(
+        text, metadata = truncate_text_output(
             selected_content,
             start_line=s,
             total_lines=total,
             file_path=file_path,
+            file_size_bytes=len(content.encode("utf-8")),
             max_bytes=max_bytes,
         )
 
         # Add continuation hint if partial read without truncation.
-        # Use TRUNCATION_NOTICE_MARKER format so ToolResultCompactor can
-        # re-truncate with the correct start_line when compacting old messages.
+        # Use TRUNCATION_NOTICE_MARKER format so ToolResultPruningMiddleware can
+        # re-truncate with the correct start_line when pruning old messages.
         if text == selected_content and e < total:
             content_bytes = len(text.encode("utf-8"))
-            notice = (
-                TRUNCATION_NOTICE_MARKER + f"\nThe output above was truncated."
-                f"\nThe full content is saved to the file "
-                f"and contains {total} lines in total."
-                f"\nThis excerpt starts at line {s} and "
-                f"covers the next {content_bytes} bytes."
-                "\nIf the current content is not enough, "
-                f"call `read_file` with file_path={file_path} "
-                f"start_line={e + 1} to read more."
+            metadata = build_truncation_metadata(
+                file_path=file_path,
+                file_size_bytes=len(content.encode("utf-8")),
+                total_lines=total,
+                start_line=s,
+                max_bytes=content_bytes,
+                excerpt_bytes=content_bytes,
+                read_from=e + 1,
             )
-            text = text + notice
+            text += metadata[TRUNCATION_METADATA_KEY]["0"]["notice"]
 
         return ToolChunk(
             is_last=True,
             state=ToolResultState.SUCCESS,
             content=[TextBlock(type="text", text=text)],
+            metadata=metadata,
         )
 
     except Exception as e:
@@ -243,7 +256,15 @@ async def read_file(  # pylint: disable=too-many-return-statements
         )
 
 
-@tool_descriptor(requires_sandbox=("file_write",), async_execution=True)
+@tool_descriptor(
+    requires_sandbox=("file_write",),
+    async_execution=True,
+    tool_type="file",
+    target_param="file_path",
+    policy_name="Write",
+    ui_description="Write content to file",
+    ui_icon="✍️",
+)
 async def write_file(
     file_path: str,
     content: str,
@@ -299,7 +320,15 @@ async def write_file(
 
 
 # pylint: disable=too-many-return-statements
-@tool_descriptor(requires_sandbox=("file_write",), async_execution=True)
+@tool_descriptor(
+    requires_sandbox=("file_write",),
+    async_execution=True,
+    tool_type="file",
+    target_param="file_path",
+    policy_name="Edit",
+    ui_description="Edit file using find-and-replace",
+    ui_icon="🖊️",
+)
 async def edit_file(
     file_path: str,
     old_text: str,
@@ -408,6 +437,11 @@ async def edit_file(
     requires_sandbox=("file_write",),
     async_execution=True,
     enabled_by_default=False,
+    tool_type="file",
+    target_param="file_path",
+    policy_name="Append",
+    ui_description="Append content to a file",
+    ui_icon="📎",
 )
 async def append_file(
     file_path: str,
