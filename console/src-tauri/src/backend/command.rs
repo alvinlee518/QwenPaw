@@ -100,7 +100,10 @@ fn packaged_python_runtime(app: &tauri::AppHandle) -> Option<PathBuf> {
     let candidates = if cfg!(windows) {
         vec![base.join("python.exe")]
     } else {
-        vec![base.join("bin").join("python3"), base.join("bin").join("python")]
+        vec![
+            base.join("bin").join("python3"),
+            base.join("bin").join("python"),
+        ]
     };
     candidates.into_iter().find(|path| path.is_file())
 }
@@ -167,36 +170,71 @@ fn path_with_backend_dir(backend_dir: &Path) -> Result<String, String> {
         .map_err(|_| "backend PATH contains non-Unicode data".to_string())
 }
 
-/// Spawns a login+interactive shell and captures its `PATH`.
+#[cfg(all(not(debug_assertions), target_os = "macos"))]
+fn wait_child_with_timeout(
+    child: &mut std::process::Child,
+    timeout: std::time::Duration,
+) -> Option<std::process::ExitStatus> {
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    log::warn!("[backend] login shell PATH resolution timed out");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(err) => {
+                log::warn!("[backend] failed to check login shell status: {err}");
+                return None;
+            }
+        }
+    }
+}
+
+/// Spawns a login+interactive shell (`$SHELL -l -i`) and captures its PATH.
 ///
-/// Runs `$SHELL -l -i -c 'printf %s "$PATH"'`. `-l` sources login init
-/// files (~/.zprofile, ~/.bash_profile); `-i` sources the interactive rc
-/// files (~/.zshrc, ~/.bashrc) — where nvm/mise/asdf/pyenv typically hook
-/// their shim directories. `-l -c` alone is NOT enough: a login
-/// non-interactive shell skips the rc files, so version-manager PATH
-/// entries would be lost. Returns None on any failure so the caller
-/// falls back to the inherited env PATH.
+/// `-i` loads interactive rc files where nvm/mise/asdf/pyenv usually add
+/// their shims. PATH is wrapped with markers because rc files may write
+/// arbitrary stdout. Timeout/failure falls back to inherited PATH.
 #[cfg(all(not(debug_assertions), target_os = "macos"))]
 fn resolve_login_shell_path() -> Option<String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    use std::time::Duration;
 
-    let output = StdCommand::new(&shell)
-        .args(["-l", "-i", "-c", "printf '%s' \"$PATH\""])
+    const TIMEOUT: Duration = Duration::from_secs(3);
+    const BEGIN: &str = "__QWENPAW_LOGIN_PATH_BEGIN__";
+    const END: &str = "__QWENPAW_LOGIN_PATH_END__";
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let cmd = format!("printf '{BEGIN}%s{END}' \"$PATH\"");
+    let mut child = StdCommand::new(&shell)
+        .args(["-l", "-i", "-c", &cmd])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .stdin(Stdio::null())
-        .output()
+        .spawn()
         .ok()?;
 
-    if !output.status.success() {
+    let status = wait_child_with_timeout(&mut child, TIMEOUT)?;
+    if !status.success() {
+        log::warn!("[backend] login shell exited unsuccessfully: {status}");
         return None;
     }
 
-    let path = String::from_utf8(output.stdout).ok()?;
-    if path.trim().is_empty() {
-        return None;
-    }
-    Some(path)
+    let stdout = String::from_utf8(child.wait_with_output().ok()?.stdout).ok()?;
+    stdout
+        .split_once(BEGIN)
+        .and_then(|(_, rest)| rest.split_once(END))
+        .map(|(_, path)| path.trim())
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
 }
 
 #[cfg(all(not(debug_assertions), windows))]
